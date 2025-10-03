@@ -33,6 +33,11 @@ function authenticateToken(req, res, next) {
         next();
     });
 }
+// Route افتراضي للتجربة
+app.get('/', (req, res) => {
+    res.send('Rescue API is running 🚑');
+});
+
 
 // تسجيل مستخدم جديد
 app.post('/register', async (req, res) => {
