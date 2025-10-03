@@ -35,7 +35,14 @@ function authenticateToken(req, res, next) {
 }
 // test route for root
 app.get('/', (req, res) => {
-    res.send('✅ Rescue API is running');
+    res.send(`
+    <div style="font-family: Arial, sans-serif; text-align:center; margin-top:50px;">
+      <h1 style="color:green;">🚀 Rescue API is Live 🚀</h1>
+      <p>👨‍💻 Developed by <b>Omar Ashraf</b> (Backend Developer)</p>
+      <p>🌍 With the support of <b>Geo-Matics Team</b></p>
+      <p>✅ Everything is running smoothly</p>
+    </div>
+  `);
 });
 
 
@@ -200,4 +207,11 @@ app.put('/report/:id/status', async (req, res) => {
 
 // تشغيل السيرفر
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log('API running on port', port));
+app.listen(port, () => console.log(`
+  ============================================
+     🚀 Rescue API is running on port ${port} 🚀
+     👨‍💻 Developer: Omar Ashraf (Backend Dev)
+     🌍 Team: Geo-MASS
+     ✅ Status: All systems operational
+  ============================================
+  `));
