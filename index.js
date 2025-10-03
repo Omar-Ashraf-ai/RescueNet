@@ -33,9 +33,9 @@ function authenticateToken(req, res, next) {
         next();
     });
 }
-// Route افتراضي للتجربة
+// test route for root
 app.get('/', (req, res) => {
-    res.send('Rescue API is running 🚑');
+    res.send('✅ Rescue API is running');
 });
 
 
