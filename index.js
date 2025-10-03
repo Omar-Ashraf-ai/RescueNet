@@ -39,7 +39,7 @@ app.get('/', (req, res) => {
     <div style="font-family: Arial, sans-serif; text-align:center; margin-top:50px;">
       <h1 style="color:green;">🚀 Rescue API is Live 🚀</h1>
       <p>👨‍💻 Developed by <b>Omar Ashraf</b> (Backend Developer)</p>
-      <p>🌍 With the support of <b>Geo-Matics Team</b></p>
+      <p>🌍 With the support of <b>Geo-Mass Team</b></p>
       <p>✅ Everything is running smoothly</p>
     </div>
   `);
