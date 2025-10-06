@@ -4,10 +4,12 @@ const express = require('express');
 const sql = require('mssql');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const cors = require('cors');
 
 // إنشاء تطبيق
 const app = express();
 app.use(express.json());
+app.use(cors());
 
 // إعداد الاتصال
 const dbConfig = {
