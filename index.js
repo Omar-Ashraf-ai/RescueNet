@@ -10,11 +10,16 @@ const cors = require('cors');
 const app = express();
 app.use(express.json());
 app.use(cors({
-    origin: ["http://localhost:3000", "https://rescue-net-rho.vercel.app"],
+    origin: [
+        "http://localhost:3000",    // React أثناء التجربة
+        "http://localhost:3001",    // في حالة آلاء فاتحة المشروع على بورت تاني
+        "https://rescue-net-rho.vercel.app",  // واجهة Flutter
+        "https://dashboard-rescu.netlify.app" // الداشبورد لما تترفع
+    ],
     methods: ["GET", "POST", "PUT", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true
 }));
-
 // إعداد الاتصال
 const dbConfig = {
     user: process.env.DB_USER,
