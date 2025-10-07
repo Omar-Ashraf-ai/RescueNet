@@ -215,6 +215,28 @@ app.put('/report/:id/status', async (req, res) => {
         sql.close();
     }
 });
+// جلب النقاط الخاصة بالمسار (Route Points)
+app.get("/api/route-points/:routeID", async (req, res) => {
+    const routeID = req.params.routeID;
+    try {
+        await sql.connect(dbConfig);
+        const result = await new sql.Request()
+            .input("routeID", sql.Int, routeID)
+            .query(`
+        SELECT SequenceNo, Latitude, Longitude 
+        FROM RoutePoints 
+        WHERE RouteID = @routeID 
+        ORDER BY SequenceNo
+      `);
+
+        res.json(result.recordset);
+    } catch (err) {
+        console.error("Database error:", err);
+        res.status(500).send("Database error");
+    } finally {
+        sql.close();
+    }
+});
 
 // تشغيل السيرفر
 const port = process.env.PORT || 3000;
