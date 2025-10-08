@@ -238,8 +238,9 @@ app.get("/api/route-points/:routeID", async (req, res) => {
     }
 });
 // حساب أقرب وحدة وتنفيذ مسار جديد
-const axios = require('axios');
-app.post('/api/calculate-route', async (req, res) => {
+const axios = require("axios");
+
+app.post("/api/calculate-route", async (req, res) => {
     try {
         await sql.connect(dbConfig);
 
@@ -257,16 +258,19 @@ app.post('/api/calculate-route', async (req, res) => {
 
         const report = reportResult.recordset[0];
         const reportCoords = extractCoords(report.ReportLocation);
-        if (!reportCoords) return res.status(400).json({ error: "فشل في قراءة موقع البلاغ" });
+        if (!reportCoords)
+            return res.status(400).json({ error: "فشل في قراءة موقع البلاغ" });
 
         const unitsResult = await new sql.Request().query(`
-      SELECT UnitID, UnitName, Location.STAsText() AS LocationWKT FROM Units
+      SELECT UnitID, UnitName, Location.STAsText() AS LocationWKT 
+      FROM Units
     `);
-        const units = unitsResult.recordset;
 
+        const units = unitsResult.recordset;
         let bestUnit = null;
         let bestDuration = Infinity;
         let bestDistance = Infinity;
+        let bestRouteCoords = [];
 
         for (const unit of units) {
             const unitCoords = extractCoords(unit.LocationWKT);
@@ -275,12 +279,14 @@ app.post('/api/calculate-route', async (req, res) => {
             try {
                 const orsResponse = await axios.post(
                     "https://api.openrouteservice.org/v2/directions/driving-car/geojson",
-                    { coordinates: [reportCoords, unitCoords] },
+                    {
+                        coordinates: [unitCoords, reportCoords],
+                    },
                     {
                         headers: {
                             Authorization: process.env.ORS_API_KEY,
-                            "Content-Type": "application/json"
-                        }
+                            "Content-Type": "application/json",
+                        },
                     }
                 );
 
@@ -288,6 +294,8 @@ app.post('/api/calculate-route', async (req, res) => {
                 if (!data.features || !data.features.length) continue;
 
                 const summary = data.features[0].properties.summary;
+                const geometry = data.features[0].geometry;
+
                 const duration = summary.duration;
                 const distance = summary.distance;
 
@@ -295,73 +303,60 @@ app.post('/api/calculate-route', async (req, res) => {
                     bestDuration = duration;
                     bestDistance = distance;
                     bestUnit = unit;
+                    bestRouteCoords = geometry.coordinates;
                 }
-            } catch (error) {
-                console.log("⚠ فشل في حساب المسار:", error.response?.status || error.message);
+            } catch (err) {
+                console.log("خطأ في استدعاء ORS:", err.message);
             }
         }
 
-        if (bestUnit) {
-            await new sql.Request()
-                .input("ReportID", sql.Int, report.ReportID)
-                .input("UnitID", sql.Int, bestUnit.UnitID)
-                .input("Distance", sql.Float, bestDistance)
-                .input("Duration", sql.Float, bestDuration)
-                .query(`
-          INSERT INTO Routes (ReportID, UnitID, Distance, Duration, CreatedAt)
-          VALUES (@ReportID, @UnitID, @Distance, @Duration, GETDATE())
-        `);
-            // استخراج RouteID الذي تم إنشاؤه للتو
-            const routeIDResult = await new sql.Request().query(`
-  SELECT TOP 1 RouteID FROM Routes ORDER BY RouteID DESC
-`);
-            const routeID = routeIDResult.recordset[0].RouteID;
+        if (!bestUnit)
+            return res.status(404).json({ error: "لم يتم العثور على مسار مناسب" });
 
-            // حفظ النقاط في جدول RoutePoints
-            const coordinates = response.data.features[0].geometry.coordinates;
+        // حفظ المسار في قاعدة البيانات
+        const routeInsert = await new sql.Request()
+            .input("ReportID", sql.Int, report.ReportID)
+            .input("UnitID", sql.Int, bestUnit.UnitID)
+            .input("Distance", sql.Float, bestDistance)
+            .input("Duration", sql.Float, bestDuration)
+            .query(`
+        INSERT INTO Routes (ReportID, UnitID, Distance, Duration, CreatedAt)
+        OUTPUT INSERTED.RouteID
+        VALUES (@ReportID, @UnitID, @Distance, @Duration, GETDATE())
+      `);
 
-            for (let i = 0; i < coordinates.length; i++) {
-                const [lon, lat] = coordinates[i];
-                await new sql.Request()
-                    .input("RouteID", sql.Int, routeID)
-                    .input("SequenceNo", sql.Int, i + 1)
-                    .input("Latitude", sql.Float, lat)
-                    .input("Longitude", sql.Float, lon)
-                    .input("Passed", sql.Bit, 0)
-                    .query(`
-      INSERT INTO RoutePoints (RouteID, SequenceNo, Latitude, Longitude, Passed)
-      VALUES (@RouteID, @SequenceNo, @Latitude, @Longitude, @Passed)
-    `);
-            }
+        const routeID = routeInsert.recordset[0].RouteID;
 
-            // تخزين الشكل المكاني في RouteGeom
-            const geojson = JSON.stringify(response.data.features[0].geometry);
+        // حفظ النقاط في جدول RoutePoints
+        for (let i = 0; i < bestRouteCoords.length; i++) {
+            const [lon, lat] = bestRouteCoords[i];
             await new sql.Request()
                 .input("RouteID", sql.Int, routeID)
-                .input("RouteGeom", sql.NVarChar(sql.MAX), geojson)
+                .input("SequenceNo", sql.Int, i + 1)
+                .input("Latitude", sql.Float, lat)
+                .input("Longitude", sql.Float, lon)
                 .query(`
-    UPDATE Routes SET RouteGeom = @RouteGeom WHERE RouteID = @RouteID
-  `);
-
-            res.json({
-                ok: true,
-                message: "تم تحديد أقرب وحدة بنجاح",
-                unit: bestUnit.UnitName,
-                durationMinutes: (bestDuration / 60).toFixed(2),
-                distanceKm: (bestDistance / 1000).toFixed(2)
-            });
-        } else {
-            res.status(404).json({ error: "لم يتم العثور على مسار مناسب" });
+          INSERT INTO RoutePoints (RouteID, SequenceNo, Latitude, Longitude)
+          VALUES (@RouteID, @SequenceNo, @Latitude, @Longitude)
+        `);
         }
+
+        res.json({
+            ok: true,
+            message: "تم تحديد أقرب وحدة وحفظ المسار بنجاح",
+            unit: bestUnit.UnitName,
+            durationMinutes: (bestDuration / 60).toFixed(2),
+            distanceKm: (bestDistance / 1000).toFixed(2),
+        });
     } catch (err) {
-        console.error("❌ خطأ أثناء التنفيذ:", err);
+        console.error("خطأ أثناء التنفيذ:", err);
         res.status(500).json({ error: err.message });
     } finally {
         sql.close();
     }
 });
 
-// دالة لتحويل WKT إلى إحداثيات
+// دالة لتحليل WKT
 function extractCoords(wkt) {
     if (!wkt) return null;
     wkt = wkt.replace(/POINT|\(|\)/gi, "").trim();
