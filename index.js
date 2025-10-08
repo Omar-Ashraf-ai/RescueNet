@@ -237,7 +237,107 @@ app.get("/api/route-points/:routeID", async (req, res) => {
         sql.close();
     }
 });
+// حساب أقرب وحدة وتنفيذ مسار جديد
+const axios = require('axios');
+app.post('/api/calculate-route', async (req, res) => {
+    try {
+        await sql.connect(dbConfig);
 
+        const reportResult = await new sql.Request().query(`
+      SELECT TOP 1 
+        r.ReportID,
+        r.Location.STAsText() AS ReportLocation
+      FROM Reports r
+      WHERE r.Report_StatusID = 1
+      ORDER BY r.ReportID DESC
+    `);
+
+        if (reportResult.recordset.length === 0)
+            return res.status(404).json({ error: "لا يوجد بلاغ جديد" });
+
+        const report = reportResult.recordset[0];
+        const reportCoords = extractCoords(report.ReportLocation);
+        if (!reportCoords) return res.status(400).json({ error: "فشل في قراءة موقع البلاغ" });
+
+        const unitsResult = await new sql.Request().query(`
+      SELECT UnitID, UnitName, Location.STAsText() AS LocationWKT FROM Units
+    `);
+        const units = unitsResult.recordset;
+
+        let bestUnit = null;
+        let bestDuration = Infinity;
+        let bestDistance = Infinity;
+
+        for (const unit of units) {
+            const unitCoords = extractCoords(unit.LocationWKT);
+            if (!unitCoords) continue;
+
+            try {
+                const response = await axios.post(
+                    "https://api.openrouteservice.org/v2/directions/driving-car/geojson",
+                    { coordinates: [reportCoords, unitCoords] },
+                    {
+                        headers: {
+                            Authorization: process.env.ORS_API_KEY,
+                            "Content-Type": "application/json"
+                        }
+                    }
+                );
+
+                const data = response.data;
+                if (!data.features || !data.features.length) continue;
+
+                const summary = data.features[0].properties.summary;
+                const duration = summary.duration;
+                const distance = summary.distance;
+
+                if (duration < bestDuration) {
+                    bestDuration = duration;
+                    bestDistance = distance;
+                    bestUnit = unit;
+                }
+            } catch (error) {
+                console.log("⚠ فشل في حساب المسار:", error.response?.status || error.message);
+            }
+        }
+
+        if (bestUnit) {
+            await new sql.Request()
+                .input("ReportID", sql.Int, report.ReportID)
+                .input("UnitID", sql.Int, bestUnit.UnitID)
+                .input("Distance", sql.Float, bestDistance)
+                .input("Duration", sql.Float, bestDuration)
+                .query(`
+          INSERT INTO Routes (ReportID, UnitID, Distance, Duration, CreatedAt)
+          VALUES (@ReportID, @UnitID, @Distance, @Duration, GETDATE())
+        `);
+
+            res.json({
+                ok: true,
+                message: "تم تحديد أقرب وحدة بنجاح",
+                unit: bestUnit.UnitName,
+                durationMinutes: (bestDuration / 60).toFixed(2),
+                distanceKm: (bestDistance / 1000).toFixed(2)
+            });
+        } else {
+            res.status(404).json({ error: "لم يتم العثور على مسار مناسب" });
+        }
+    } catch (err) {
+        console.error("❌ خطأ أثناء التنفيذ:", err);
+        res.status(500).json({ error: err.message });
+    } finally {
+        sql.close();
+    }
+});
+
+// دالة لتحويل WKT إلى إحداثيات
+function extractCoords(wkt) {
+    if (!wkt) return null;
+    wkt = wkt.replace(/POINT|\(|\)/gi, "").trim();
+    const parts = wkt.split(" ");
+    if (parts.length < 2) return null;
+    return [parseFloat(parts[0]), parseFloat(parts[1])];
+}
 // تشغيل السيرفر
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`
