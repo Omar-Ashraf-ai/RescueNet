@@ -273,7 +273,7 @@ app.post('/api/calculate-route', async (req, res) => {
             if (!unitCoords) continue;
 
             try {
-                const response = await axios.post(
+                const orsResponse = await axios.post(
                     "https://api.openrouteservice.org/v2/directions/driving-car/geojson",
                     { coordinates: [reportCoords, unitCoords] },
                     {
@@ -284,7 +284,7 @@ app.post('/api/calculate-route', async (req, res) => {
                     }
                 );
 
-                const data = response.data;
+                const data = orsResponse.data;
                 if (!data.features || !data.features.length) continue;
 
                 const summary = data.features[0].properties.summary;
