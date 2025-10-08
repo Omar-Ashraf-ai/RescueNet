@@ -311,6 +311,37 @@ app.post('/api/calculate-route', async (req, res) => {
           INSERT INTO Routes (ReportID, UnitID, Distance, Duration, CreatedAt)
           VALUES (@ReportID, @UnitID, @Distance, @Duration, GETDATE())
         `);
+            // استخراج RouteID الذي تم إنشاؤه للتو
+            const routeIDResult = await new sql.Request().query(`
+  SELECT TOP 1 RouteID FROM Routes ORDER BY RouteID DESC
+`);
+            const routeID = routeIDResult.recordset[0].RouteID;
+
+            // حفظ النقاط في جدول RoutePoints
+            const coordinates = response.data.features[0].geometry.coordinates;
+
+            for (let i = 0; i < coordinates.length; i++) {
+                const [lon, lat] = coordinates[i];
+                await new sql.Request()
+                    .input("RouteID", sql.Int, routeID)
+                    .input("SequenceNo", sql.Int, i + 1)
+                    .input("Latitude", sql.Float, lat)
+                    .input("Longitude", sql.Float, lon)
+                    .input("Passed", sql.Bit, 0)
+                    .query(`
+      INSERT INTO RoutePoints (RouteID, SequenceNo, Latitude, Longitude, Passed)
+      VALUES (@RouteID, @SequenceNo, @Latitude, @Longitude, @Passed)
+    `);
+            }
+
+            // تخزين الشكل المكاني في RouteGeom
+            const geojson = JSON.stringify(response.data.features[0].geometry);
+            await new sql.Request()
+                .input("RouteID", sql.Int, routeID)
+                .input("RouteGeom", sql.NVarChar(sql.MAX), geojson)
+                .query(`
+    UPDATE Routes SET RouteGeom = @RouteGeom WHERE RouteID = @RouteID
+  `);
 
             res.json({
                 ok: true,
