@@ -356,8 +356,34 @@ async function calculateRoutes() {
     } finally {
         sql.close();
     }
-}
 
+}
+// جلب آخر RouteID لبلاغ معين
+app.get("/api/route/latest/:reportID", async (req, res) => {
+    const reportID = req.params.reportID;
+    try {
+        await sql.connect(dbConfig);
+        const result = await new sql.Request()
+            .input("ReportID", sql.Int, reportID)
+            .query(`
+        SELECT TOP 1 RouteID 
+        FROM Routes 
+        WHERE ReportID = @ReportID
+        ORDER BY RouteID DESC
+      `);
+
+        if (result.recordset.length > 0) {
+            res.json(result.recordset[0]);
+        } else {
+            res.status(404).json({ error: "No route found for this report" });
+        }
+    } catch (err) {
+        console.error("Error fetching latest route:", err.message);
+        res.status(500).json({ error: err.message });
+    } finally {
+        sql.close();
+    }
+});
 // استدعاء الدالة كل 5 ثواني
 setInterval(calculateRoutes, 5000);
 // تشغيل السيرفر
