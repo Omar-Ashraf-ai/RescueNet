@@ -122,7 +122,12 @@ app.post('/login', async (req, res) => {
             { expiresIn: '1h' }
         );
 
-        res.json({ token });
+        res.json({
+            ok: true,
+            token,
+            userId: user.UserID,
+            role: user.Role
+        });
     } catch (err) {
         res.status(500).json({ error: err.message });
     } finally {
@@ -358,38 +363,60 @@ async function calculateRoutes() {
     }
 
 }
+// GET latest Route for a specific report
+app.get('/api/route/latest/:reportID', async (req, res) => {
+    const reportID = parseInt(req.params.reportID, 10);
+    if (isNaN(reportID)) return res.status(400).json({ error: 'Invalid reportID' });
+
+    try {
+        await sql.connect(dbConfig);
+        const result = await new sql.Request()
+            .input('ReportID', sql.Int, reportID)
+            .query('SELECT TOP 1 RouteID FROM Routes WHERE ReportID = @ReportID ORDER BY RouteID DESC');
+
+        if (!result.recordset || result.recordset.length === 0) {
+            return res.status(404).json({ error: 'No route found for this report' });
+        }
+
+        // يرجع { RouteID: 123 }
+        res.json(result.recordset[0]);
+    } catch (err) {
+        console.error('Error fetching latest route:', err);
+        res.status(500).json({ error: err.message });
+    } finally {
+        sql.close();
+    }
+});
 // جلب نقاط المسار الخاصة ببلاغ معين (ReportID)
-app.get("/api/route-points-by-report/:reportId", async (req, res) => {
-    const reportId = req.params.reportId;
+app.get("/api/route-points/by-user/:userId", async (req, res) => {
+    const userId = req.params.userId;
 
     try {
         await sql.connect(dbConfig);
 
         const result = await new sql.Request()
-            .input("ReportID", sql.Int, reportId)
+            .input("UserID", sql.Int, userId)
             .query(`
-        SELECT rp.SequenceNo, rp.Latitude, rp.Longitude
+        SELECT rp.RouteID, rp.SequenceNo, rp.Latitude, rp.Longitude
         FROM RoutePoints rp
         JOIN Routes r ON rp.RouteID = r.RouteID
-        WHERE r.ReportID = @ReportID
-        ORDER BY rp.SequenceNo ASC
+        JOIN Reports re ON r.ReportID = re.ReportID
+        WHERE re.UserID = @UserID
+        ORDER BY rp.RouteID DESC, rp.SequenceNo ASC
       `);
 
         if (result.recordset.length === 0) {
-            return res.status(404).json({ ok: false, message: "No route points found for this report" });
+            return res.status(404).json({ error: "No route points found for this user's reports" });
         }
 
-        res.json({
-            ok: true,
-            count: result.recordset.length,
-            points: result.recordset
-        });
+        res.json(result.recordset);
     } catch (err) {
-        console.error("Error fetching route points:", err.message);
-        res.status(500).json({ ok: false, error: err.message });
+        console.error("Error fetching route points by user:", err);
+        res.status(500).json({ error: err.message });
     } finally {
         sql.close();
     }
+
 });
 // استدعاء الدالة كل 5 ثواني
 setInterval(calculateRoutes, 5000);
