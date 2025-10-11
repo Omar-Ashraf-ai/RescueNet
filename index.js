@@ -361,63 +361,74 @@ async function calculateRoutes() {
     } finally {
         sql.close();
     }
+    // جلب نقاط المسار بناءً على المستخدم
+    app.get("/api/route-points/user/:userId", async (req, res) => {
+        const { userId } = req.params;
 
-}
-// GET latest Route for a specific report
-app.get('/api/route/latest/:reportID', async (req, res) => {
-    const reportID = parseInt(req.params.reportID, 10);
-    if (isNaN(reportID)) return res.status(400).json({ error: 'Invalid reportID' });
+        if (!userId) return res.status(400).json({ error: "userId required" });
 
-    try {
-        await sql.connect(dbConfig);
-        const result = await new sql.Request()
-            .input('ReportID', sql.Int, reportID)
-            .query('SELECT TOP 1 RouteID FROM Routes WHERE ReportID = @ReportID ORDER BY RouteID DESC');
+        try {
+            await sql.connect(dbConfig);
 
-        if (!result.recordset || result.recordset.length === 0) {
-            return res.status(404).json({ error: 'No route found for this report' });
-        }
-
-        // يرجع { RouteID: 123 }
-        res.json(result.recordset[0]);
-    } catch (err) {
-        console.error('Error fetching latest route:', err);
-        res.status(500).json({ error: err.message });
-    } finally {
-        sql.close();
-    }
-});
-// جلب نقاط المسار الخاصة ببلاغ معين (ReportID)
-app.get("/api/route-points/by-user/:userId", async (req, res) => {
-    const userId = req.params.userId;
-
-    try {
-        await sql.connect(dbConfig);
-
-        const result = await new sql.Request()
-            .input("UserID", sql.Int, userId)
-            .query(`
-        SELECT rp.RouteID, rp.SequenceNo, rp.Latitude, rp.Longitude
-        FROM RoutePoints rp
-        JOIN Routes r ON rp.RouteID = r.RouteID
-        JOIN Reports re ON r.ReportID = re.ReportID
-        WHERE re.UserID = @UserID
-        ORDER BY rp.RouteID DESC, rp.SequenceNo ASC
+            // 1. نجيب آخر ReportID خاص بالمستخدم
+            const reportResult = await new sql.Request()
+                .input("userId", sql.Int, userId)
+                .query(`
+        SELECT TOP 1 ReportID 
+        FROM Reports
+        WHERE UserID = @userId
+        ORDER BY DateCreated DESC
       `);
 
-        if (result.recordset.length === 0) {
-            return res.status(404).json({ error: "No route points found for this user's reports" });
+            if (reportResult.recordset.length === 0)
+                return res.status(404).json({ error: "No reports found for this user" });
+
+            const reportId = reportResult.recordset[0].ReportID;
+
+            // 2. نجيب RouteID المرتبط بالبلاغ
+            const routeResult = await new sql.Request()
+                .input("reportId", sql.Int, reportId)
+                .query(`
+        SELECT TOP 1 RouteID 
+        FROM Routes
+        WHERE ReportID = @reportId
+        ORDER BY CreatedAt DESC
+      `);
+
+            if (routeResult.recordset.length === 0)
+                return res.status(404).json({ error: "No route found for this report" });
+
+            const routeId = routeResult.recordset[0].RouteID;
+
+            // 3. نجيب نقاط المسار الخاصة بالـ RouteID
+            const pointsResult = await new sql.Request()
+                .input("routeId", sql.Int, routeId)
+                .query(`
+        SELECT SequenceNo, Latitude, Longitude
+        FROM RoutePoints
+        WHERE RouteID = @routeId
+        ORDER BY SequenceNo ASC
+      `);
+
+            if (pointsResult.recordset.length === 0)
+                return res.status(404).json({ error: "No route points found" });
+
+            // 4. نرجع البيانات كاملة
+            res.json({
+                userId,
+                reportId,
+                routeId,
+                points: pointsResult.recordset,
+            });
+        } catch (err) {
+            console.error("Error fetching route points:", err);
+            res.status(500).json({ error: err.message });
+        } finally {
+            sql.close();
         }
+    });
+}
 
-        res.json(result.recordset);
-    } catch (err) {
-        console.error("Error fetching route points by user:", err);
-        res.status(500).json({ error: err.message });
-    } finally {
-        sql.close();
-    }
-
-});
 // استدعاء الدالة كل 5 ثواني
 setInterval(calculateRoutes, 5000);
 // تشغيل السيرفر
