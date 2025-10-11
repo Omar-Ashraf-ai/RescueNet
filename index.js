@@ -359,7 +359,7 @@ async function calculateRoutes() {
 
 }
 // جلب آخر RouteID لبلاغ معين
-app.get("/api/route/latest/:reportID", async (req, res) => {
+app.get("/route-points/:reportID", async (req, res) => {
     const reportID = req.params.reportID;
     try {
         await sql.connect(dbConfig);
