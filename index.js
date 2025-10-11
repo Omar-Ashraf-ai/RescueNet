@@ -358,28 +358,35 @@ async function calculateRoutes() {
     }
 
 }
-// جلب آخر RouteID لبلاغ معين
-app.get("/api/route/latest/:reportID", async (req, res) => {
-    const reportID = req.params.reportID;
+// جلب نقاط المسار الخاصة ببلاغ معين (ReportID)
+app.get("/api/route-points-by-report/:reportId", async (req, res) => {
+    const reportId = req.params.reportId;
+
     try {
         await sql.connect(dbConfig);
+
         const result = await new sql.Request()
-            .input("ReportID", sql.Int, reportID)
+            .input("ReportID", sql.Int, reportId)
             .query(`
-        SELECT TOP 1 RouteID 
-        FROM Routes 
-        WHERE ReportID = @ReportID
-        ORDER BY RouteID DESC
+        SELECT rp.SequenceNo, rp.Latitude, rp.Longitude
+        FROM RoutePoints rp
+        JOIN Routes r ON rp.RouteID = r.RouteID
+        WHERE r.ReportID = @ReportID
+        ORDER BY rp.SequenceNo ASC
       `);
 
-        if (result.recordset.length > 0) {
-            res.json(result.recordset[0]);
-        } else {
-            res.status(404).json({ error: "No route found for this report" });
+        if (result.recordset.length === 0) {
+            return res.status(404).json({ ok: false, message: "No route points found for this report" });
         }
+
+        res.json({
+            ok: true,
+            count: result.recordset.length,
+            points: result.recordset
+        });
     } catch (err) {
-        console.error("Error fetching latest route:", err.message);
-        res.status(500).json({ error: err.message });
+        console.error("Error fetching route points:", err.message);
+        res.status(500).json({ ok: false, error: err.message });
     } finally {
         sql.close();
     }
