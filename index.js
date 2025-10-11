@@ -5,35 +5,34 @@ const sql = require('mssql');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const cors = require('cors');
+const axios = require('axios');
 
-// إنشاء تطبيق
+// إنشاء التطبيق
 const app = express();
 app.use(express.json());
-app.use(cors({                              // بعرف صلاحيات الكروس عشان الرياكت يقدر يتصل بي
+app.use(cors({
     origin: [
-        "http://localhost:3000",    // React أثناء التجربة
-        "http://localhost:3001",    // في حالة آلاء فاتحة المشروع على بورت تاني
-        "https://rescue-net-rho.vercel.app",  // الرابط النهائي للموقع
-        "https://dashboard-rescu.netlify.app" // الداشبورد لما تترفع
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "https://rescue-net-rho.vercel.app",
+        "https://dashboard-rescu.netlify.app"
     ],
     methods: ["GET", "POST", "PUT", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true
 }));
-// إعداد الاتصال
+
+// إعداد الاتصال بقاعدة البيانات
 const dbConfig = {
     user: process.env.DB_USER,
     password: process.env.DB_PASS,
     server: process.env.DB_SERVER,
     database: process.env.DB_NAME,
-    options: {
-        encrypt: true,
-        trustServerCertificate: true
-    },
+    options: { encrypt: true, trustServerCertificate: true },
     pool: { max: 10, min: 0, idleTimeoutMillis: 30000 }
 };
 
-// ميدل وير لفحص التوكن
+// فحص التوكن
 function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
@@ -44,39 +43,37 @@ function authenticateToken(req, res, next) {
         next();
     });
 }
-// test route for root
+
+// اختبار السيرفر
 app.get('/', (req, res) => {
     res.send(`
-    <div style="font-family: Arial, sans-serif; text-align:center; margin-top:50px;">
-      <h1 style="color:green;">🚀 Rescue API is Live 🚀</h1>
-      <p>👨‍💻 Developed by <b>Omar Ashraf</b> (Backend Developer)</p>
-      <p>🌍 With the support of <b>Geo-Mass Team</b></p>
-      <p>✅ Everything is running smoothly</p>
+    <div style="font-family: Arial; text-align:center; margin-top:50px;">
+      <h2 style="color:green;">🚀 Rescue API is Live 🚀</h2>
+      <p>Developer: <b>Omar Ashraf</b> | Team: Geo-MASS</p>
     </div>
-  `);
+  `);
 });
-
 
 // تسجيل مستخدم جديد
 app.post('/register', async (req, res) => {
     const { username, email, password, role } = req.body;
-    if (!username || !email || !password) {
+    if (!username || !email || !password)
         return res.status(400).json({ error: 'missing fields' });
-    }
+
     try {
         const hashedPassword = await bcrypt.hash(password, 10);
         await sql.connect(dbConfig);
 
-        const request = new sql.Request();
-        request.input('UserName', sql.NVarChar(100), username);
-        request.input('Email', sql.NVarChar(150), email);
-        request.input('Role', sql.NVarChar(50), role || 'User');
+        const result = await new sql.Request()
+            .input('UserName', sql.NVarChar(100), username)
+            .input('Email', sql.NVarChar(150), email)
+            .input('Role', sql.NVarChar(50), role || 'User')
+            .query(`
+        INSERT INTO Users (UserName, Email, Role)
+        OUTPUT INSERTED.UserID
+        VALUES (@UserName, @Email, @Role)
+      `);
 
-        const result = await request.query(`
-      INSERT INTO Users (UserName, Email, Role)
-      OUTPUT INSERTED.UserID
-      VALUES (@UserName, @Email, @Role)
-    `);
         const userId = result.recordset[0].UserID;
 
         await new sql.Request()
@@ -96,30 +93,35 @@ app.post('/register', async (req, res) => {
     }
 });
 
-// تسجيل دخول
+// تسجيل الدخول
 app.post('/login', async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'missing fields' });
 
     try {
         await sql.connect(dbConfig);
-        const request = new sql.Request();
-        request.input('Email', sql.NVarChar(150), email);
+        const result = await new sql.Request()
+            .input('Email', sql.NVarChar(150), email)
+            .query(`
+        SELECT u.UserID, u.UserName, u.Role, l.PasswordHash
+        FROM Users u
+        JOIN Login_Users l ON u.UserID = l.UserID
+        WHERE l.Email = @Email
+      `);
 
-        const result = await request.query(`
-      SELECT u.UserID, u.UserName, u.Role, l.PasswordHash
-      FROM Users u
-      JOIN Login_Users l ON u.UserID = l.UserID
-      WHERE l.Email = @Email
-    `);
-
-        if (result.recordset.length === 0) return res.status(401).json({ error: 'invalid credentials' });
+        if (result.recordset.length === 0)
+            return res.status(401).json({ error: 'invalid credentials' });
 
         const user = result.recordset[0];
         const match = await bcrypt.compare(password, user.PasswordHash);
         if (!match) return res.status(401).json({ error: 'invalid credentials' });
 
-        const token = jwt.sign({ userId: user.UserID, role: user.Role }, process.env.JWT_SECRET, { expiresIn: '1h' });
+        const token = jwt.sign(
+            { userId: user.UserID, role: user.Role },
+            process.env.JWT_SECRET,
+            { expiresIn: '1h' }
+        );
+
         res.json({ token });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -128,14 +130,13 @@ app.post('/login', async (req, res) => {
     }
 });
 
-// إضافة بلاغ (الحالة افتراضيًا جديد = 1)
+// إضافة بلاغ
 app.post('/report', authenticateToken, async (req, res) => {
     const { unitId, locationWKT } = req.body;
     const userId = req.user.userId;
 
-    if (!unitId || !locationWKT) {
+    if (!unitId || !locationWKT)
         return res.status(400).json({ error: 'missing fields' });
-    }
 
     try {
         await sql.connect(dbConfig);
@@ -146,19 +147,15 @@ app.post('/report', authenticateToken, async (req, res) => {
         request.input('Report_StatusID', sql.Int, 1);
         request.input('LocationWKT', sql.NVarChar(200), locationWKT);
 
-        // حفظ الموقع في العمود LocationWKT مباشرة
-        const result = await request.query(`
-      INSERT INTO Reports (UserID, UnitID, Report_StatusID, LocationWKT)
-      OUTPUT INSERTED.ReportID
-      VALUES (@UserID, @UnitID, @Report_StatusID, @LocationWKT)
-    `);
+        await request.execute('AddReport');
 
-        const reportId = result.recordset[0].ReportID;
+        const reportIdQuery = await new sql.Request().query('SELECT TOP 1 ReportID FROM Reports ORDER BY ReportID DESC');
+        const reportId = reportIdQuery.recordset[0].ReportID;
 
         res.status(201).json({
             ok: true,
             message: "report created successfully",
-            reportId: reportId
+            reportId
         });
     } catch (err) {
         console.error("Report Error:", err.message);
@@ -167,7 +164,8 @@ app.post('/report', authenticateToken, async (req, res) => {
         sql.close();
     }
 });
-// جلب كل البلاغات
+
+// جلب البلاغات
 app.get('/reports', async (req, res) => {
     try {
         await sql.connect(dbConfig);
@@ -180,7 +178,7 @@ app.get('/reports', async (req, res) => {
     }
 });
 
-// جلب كل الوحدات
+// جلب الوحدات
 app.get('/units', async (req, res) => {
     try {
         await sql.connect(dbConfig);
@@ -193,7 +191,7 @@ app.get('/units', async (req, res) => {
     }
 });
 
-// جلب كل الحالات
+// جلب الحالات
 app.get('/statuses', authenticateToken, async (req, res) => {
     try {
         await sql.connect(dbConfig);
@@ -217,13 +215,11 @@ app.put('/report/:id/status', async (req, res) => {
         const request = new sql.Request();
         request.input('ReportID', sql.Int, reportId);
         request.input('Report_StatusID', sql.Int, statusId);
-
         await request.query(`
       UPDATE Reports
       SET Report_StatusID = @Report_StatusID
       WHERE ReportID = @ReportID
     `);
-
         res.json({ ok: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -231,32 +227,8 @@ app.put('/report/:id/status', async (req, res) => {
         sql.close();
     }
 });
-//  بداية كود سناء الروتينج 
-// جلب النقاط الخاصة بالمسار (Route Points)
-app.get("/api/route-points/:routeID", async (req, res) => {
-    const routeID = req.params.routeID;
-    try {
-        await sql.connect(dbConfig);
-        const result = await new sql.Request()
-            .input("routeID", sql.Int, routeID)
-            .query(`
-        SELECT SequenceNo, Latitude, Longitude 
-        FROM RoutePoints 
-        WHERE RouteID = @routeID 
-        ORDER BY SequenceNo
-      `);
 
-        res.json(result.recordset);
-    } catch (err) {
-        console.error("Database error:", err);
-        res.status(500).send("Database error");
-    } finally {
-        sql.close();
-    }
-});
-// حساب أقرب وحدة وتنفيذ مسار جديد
-const axios = require("axios");
-// دالة لتحليل WKT
+// دالة تحليل WKT
 function extractCoords(wkt) {
     if (!wkt) return null;
     wkt = wkt.replace(/POINT|\(|\)/gi, "").trim();
@@ -269,13 +241,12 @@ function extractCoords(wkt) {
 async function calculateRoutes() {
     try {
         await sql.connect(dbConfig);
-
         const reportsResult = await new sql.Request().query(`
-  SELECT r.ReportID, r.LocationWKT AS ReportLocation
-  FROM Reports r
-  WHERE r.Report_StatusID = 1
-  ORDER BY r.ReportID DESC
-`);
+      SELECT r.ReportID, r.Location.STAsText() AS ReportLocation
+      FROM Reports r
+      WHERE r.Report_StatusID = 1
+      ORDER BY r.ReportID DESC
+    `);
 
         if (reportsResult.recordset.length === 0) {
             console.log("لا توجد بلاغات جديدة");
@@ -289,20 +260,15 @@ async function calculateRoutes() {
             const reportCoords = extractCoords(report.ReportLocation);
             if (!reportCoords) continue;
 
-            // تحقق إن البلاغ ملوش مسار محفوظ
             const routeCheck = await new sql.Request()
                 .input("ReportID", sql.Int, report.ReportID)
                 .query("SELECT RouteID FROM Routes WHERE ReportID = @ReportID");
 
-            if (routeCheck.recordset.length > 0) {
-                console.log(`م تخطي البلاغ ${report.ReportID} (المسار موجود مسبقًا)`);
-                continue;
-            }
+            if (routeCheck.recordset.length > 0) continue;
 
-            // كل الوحدات
             const unitsResult = await new sql.Request().query(`
-        SELECT UnitID, UnitName, LocationWKT 
-FROM Units
+        SELECT UnitID, UnitName, Location.STAsText() AS LocationWKT 
+        FROM Units
       `);
 
             const units = unitsResult.recordset;
@@ -349,7 +315,6 @@ FROM Units
 
             if (!bestUnit) continue;
 
-            // حفظ المسار
             const routeInsert = await new sql.Request()
                 .input("ReportID", sql.Int, report.ReportID)
                 .input("UnitID", sql.Int, bestUnit.UnitID)
@@ -363,7 +328,6 @@ FROM Units
 
             const routeID = routeInsert.recordset[0].RouteID;
 
-            // حفظ النقاط في RoutePoints
             for (let i = 0; i < bestRouteCoords.length; i++) {
                 const [lon, lat] = bestRouteCoords[i];
                 await new sql.Request()
@@ -381,24 +345,12 @@ FROM Units
                 reportId: report.ReportID,
                 routeId: routeID,
                 unit: bestUnit.UnitName,
-                distanceKm: (bestDistance / 1000).toFixed(2),
-                durationMin: (bestDuration / 60).toFixed(2),
             });
-
-            console.log(`م حفظ مسار لبلاغ ${report.ReportID} (${bestUnit.UnitName})`);
         }
 
-        if (processedRoutes.length === 0) {
-            console.log("لم يتم توليد أي مسارات جديدة");
-            return;
-        }
+        if (processedRoutes.length > 0)
+            console.log("تم إنشاء مسارات جديدة:", processedRoutes);
 
-        console.log("تم إنشاء المسارات التالية:");
-        processedRoutes.forEach((route) => {
-            console.log(`
-        بلاغ ${route.reportId} → وحدة ${route.unit} | ${route.distanceKm} كم | ${route.durationMin} دقيقة
-      `);
-        });
     } catch (err) {
         console.error("خطأ أثناء التنفيذ:", err);
     } finally {
@@ -408,13 +360,12 @@ FROM Units
 
 // استدعاء الدالة كل 5 ثواني
 setInterval(calculateRoutes, 5000);
-
 // تشغيل السيرفر
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`
   ============================================
      🚀 Rescue API is running on port ${port} 🚀
-     👨‍💻 Developer: Omar Ashraf (Backend Dev)
+     👨‍💻 Developer: Omar, Sanaa, Maysa (Backend Dev)
      🌍 Team: Geo-MASS
      ✅ Status: All systems operational
   ============================================
