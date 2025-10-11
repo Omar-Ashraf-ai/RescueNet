@@ -361,6 +361,9 @@ async function calculateRoutes() {
     } finally {
         sql.close();
     }
+    await new sql.Request()
+        .input("ReportID", sql.Int, report.ReportID)
+        .query("UPDATE Reports SET Report_StatusID = 2 WHERE ReportID = @ReportID");
 }
 // نقطة نهاية لجلب نقاط المسار بناءً على RouteID
 // ✅ نقطة نهاية لجلب RouteID بناءً على ReportID
@@ -396,7 +399,38 @@ app.get("/routes/by-report/:reportId", async (req, res) => {
 });
 
 
-// ✅ نقطة نهاية لجلب نقاط المسار بناءً على RouteID
+// ✅ جلب RouteID بناءً على ReportID
+app.get("/routes/by-report/:reportId", async (req, res) => {
+    const { reportId } = req.params;
+
+    try {
+        await sql.connect(dbConfig);
+
+        const routeResult = await new sql.Request()
+            .input("ReportID", sql.Int, reportId)
+            .execute("GetRouteByReportId_API");
+
+        if (routeResult.recordset.length === 0) {
+            return res.status(404).json({
+                ok: false,
+                message: "لم يتم العثور على مسار مرتبط بهذا البلاغ",
+            });
+        }
+
+        res.json({
+            ok: true,
+            routeId: routeResult.recordset[0].RouteID
+        });
+    } catch (err) {
+        console.error("Database error:", err);
+        res.status(500).json({ ok: false, error: err.message });
+    } finally {
+        sql.close();
+    }
+});
+
+
+// ✅ جلب نقاط المسار بناءً على RouteID
 app.get("/route-points/:routeId", async (req, res) => {
     const { routeId } = req.params;
 
@@ -405,12 +439,7 @@ app.get("/route-points/:routeId", async (req, res) => {
 
         const pointsResult = await new sql.Request()
             .input("RouteID", sql.Int, routeId)
-            .query(`
-        SELECT Latitude AS lat, Longitude AS lng, SequenceNo
-        FROM RoutePoints
-        WHERE RouteID = @RouteID
-        ORDER BY SequenceNo ASC
-      `);
+            .execute("GetRoutePoints_API");
 
         if (pointsResult.recordset.length === 0) {
             return res.status(404).json({
