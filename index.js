@@ -132,18 +132,25 @@ app.post('/login', async (req, res) => {
 app.post('/report', authenticateToken, async (req, res) => {
     const { unitId, locationWKT } = req.body;
     const userId = req.user.userId;
-    if (!unitId || !locationWKT) return res.status(400).json({ error: 'missing fields' });
+
+    if (!locationWKT) return res.status(400).json({ error: 'location required' });
 
     try {
         await sql.connect(dbConfig);
         const request = new sql.Request();
+
         request.input('UserID', sql.Int, userId);
-        request.input('UnitID', sql.Int, unitId);
-        request.input('Report_StatusID', sql.Int, 1); // جديد
+        // نخلي UnitID ممكن يكون Null في البداية
+        if (unitId) {
+            request.input('UnitID', sql.Int, unitId);
+        } else {
+            request.input('UnitID', sql.Int, null);
+        }
+        request.input('Report_StatusID', sql.Int, 1);
         request.input('LocationWKT', sql.NVarChar(100), locationWKT);
 
         await request.execute('AddReport');
-        res.status(201).json({ ok: true });
+        res.status(201).json({ ok: true, message: 'report created successfully' });
     } catch (err) {
         res.status(500).json({ error: err.message });
     } finally {
@@ -242,152 +249,152 @@ app.get("/api/route-points/:routeID", async (req, res) => {
 const axios = require("axios");
 // دالة لتحليل WKT
 function extractCoords(wkt) {
-  if (!wkt) return null;
-  wkt = wkt.replace(/POINT|\(|\)/gi, "").trim();
-  const parts = wkt.split(" ");
-  if (parts.length < 2) return null;
-  return [parseFloat(parts[0]), parseFloat(parts[1])];
+    if (!wkt) return null;
+    wkt = wkt.replace(/POINT|\(|\)/gi, "").trim();
+    const parts = wkt.split(" ");
+    if (parts.length < 2) return null;
+    return [parseFloat(parts[0]), parseFloat(parts[1])];
 }
 
 // دالة حساب المسارات
 async function calculateRoutes() {
-  try {
-    await sql.connect(dbConfig);
+    try {
+        await sql.connect(dbConfig);
 
-    const reportsResult = await new sql.Request().query(`
+        const reportsResult = await new sql.Request().query(`
       SELECT r.ReportID, r.Location.STAsText() AS ReportLocation
       FROM Reports r
       WHERE r.Report_StatusID = 1
       ORDER BY r.ReportID DESC
     `);
 
-    if (reportsResult.recordset.length === 0) {
-      console.log("لا توجد بلاغات جديدة");
-      return;
-    }
+        if (reportsResult.recordset.length === 0) {
+            console.log("لا توجد بلاغات جديدة");
+            return;
+        }
 
-    const reports = reportsResult.recordset;
-    const processedRoutes = [];
+        const reports = reportsResult.recordset;
+        const processedRoutes = [];
 
-    for (const report of reports) {
-      const reportCoords = extractCoords(report.ReportLocation);
-      if (!reportCoords) continue;
+        for (const report of reports) {
+            const reportCoords = extractCoords(report.ReportLocation);
+            if (!reportCoords) continue;
 
-      // تحقق إن البلاغ ملوش مسار محفوظ
-      const routeCheck = await new sql.Request()
-        .input("ReportID", sql.Int, report.ReportID)
-        .query("SELECT RouteID FROM Routes WHERE ReportID = @ReportID");
+            // تحقق إن البلاغ ملوش مسار محفوظ
+            const routeCheck = await new sql.Request()
+                .input("ReportID", sql.Int, report.ReportID)
+                .query("SELECT RouteID FROM Routes WHERE ReportID = @ReportID");
 
-      if (routeCheck.recordset.length > 0) {
-        console.log(`م تخطي البلاغ ${report.ReportID} (المسار موجود مسبقًا)`);
-        continue;
-      }
+            if (routeCheck.recordset.length > 0) {
+                console.log(`م تخطي البلاغ ${report.ReportID} (المسار موجود مسبقًا)`);
+                continue;
+            }
 
-      // كل الوحدات
-      const unitsResult = await new sql.Request().query(`
+            // كل الوحدات
+            const unitsResult = await new sql.Request().query(`
         SELECT UnitID, UnitName, Location.STAsText() AS LocationWKT 
         FROM Units
       `);
 
-      const units = unitsResult.recordset;
-      let bestUnit = null;
-      let bestDuration = Infinity;
-      let bestDistance = Infinity;
-      let bestRouteCoords = [];
+            const units = unitsResult.recordset;
+            let bestUnit = null;
+            let bestDuration = Infinity;
+            let bestDistance = Infinity;
+            let bestRouteCoords = [];
 
-      for (const unit of units) {
-        const unitCoords = extractCoords(unit.LocationWKT);
-        if (!unitCoords) continue;
+            for (const unit of units) {
+                const unitCoords = extractCoords(unit.LocationWKT);
+                if (!unitCoords) continue;
 
-        try {
-          const orsResponse = await axios.post(
-            "https://api.openrouteservice.org/v2/directions/driving-car/geojson",
-            { coordinates: [unitCoords, reportCoords] },
-            {
-              headers: {
-                Authorization: process.env.ORS_API_KEY,
-                "Content-Type": "application/json",
-              },
+                try {
+                    const orsResponse = await axios.post(
+                        "https://api.openrouteservice.org/v2/directions/driving-car/geojson",
+                        { coordinates: [unitCoords, reportCoords] },
+                        {
+                            headers: {
+                                Authorization: process.env.ORS_API_KEY,
+                                "Content-Type": "application/json",
+                            },
+                        }
+                    );
+
+                    const data = orsResponse.data;
+                    if (!data.features || !data.features.length) continue;
+
+                    const summary = data.features[0].properties.summary;
+                    const geometry = data.features[0].geometry;
+
+                    const duration = summary.duration;
+                    const distance = summary.distance;
+
+                    if (duration < bestDuration) {
+                        bestDuration = duration;
+                        bestDistance = distance;
+                        bestUnit = unit;
+                        bestRouteCoords = geometry.coordinates;
+                    }
+                } catch (err) {
+                    console.log("خطأ في ORS:", err.message);
+                }
             }
-          );
 
-          const data = orsResponse.data;
-          if (!data.features || !data.features.length) continue;
+            if (!bestUnit) continue;
 
-          const summary = data.features[0].properties.summary;
-          const geometry = data.features[0].geometry;
-
-          const duration = summary.duration;
-          const distance = summary.distance;
-
-          if (duration < bestDuration) {
-            bestDuration = duration;
-            bestDistance = distance;
-            bestUnit = unit;
-            bestRouteCoords = geometry.coordinates;
-          }
-        } catch (err) {
-          console.log("خطأ في ORS:", err.message);
-        }
-      }
-
-      if (!bestUnit) continue;
-
-      // حفظ المسار
-      const routeInsert = await new sql.Request()
-        .input("ReportID", sql.Int, report.ReportID)
-        .input("UnitID", sql.Int, bestUnit.UnitID)
-        .input("Distance", sql.Float, bestDistance)
-        .input("Duration", sql.Float, bestDuration)
-        .query(`
+            // حفظ المسار
+            const routeInsert = await new sql.Request()
+                .input("ReportID", sql.Int, report.ReportID)
+                .input("UnitID", sql.Int, bestUnit.UnitID)
+                .input("Distance", sql.Float, bestDistance)
+                .input("Duration", sql.Float, bestDuration)
+                .query(`
           INSERT INTO Routes (ReportID, UnitID, Distance, Duration, CreatedAt)
           OUTPUT INSERTED.RouteID
           VALUES (@ReportID, @UnitID, @Distance, @Duration, GETDATE())
         `);
 
-      const routeID = routeInsert.recordset[0].RouteID;
+            const routeID = routeInsert.recordset[0].RouteID;
 
-      // حفظ النقاط في RoutePoints
-      for (let i = 0; i < bestRouteCoords.length; i++) {
-        const [lon, lat] = bestRouteCoords[i];
-        await new sql.Request()
-          .input("RouteID", sql.Int, routeID)
-          .input("SequenceNo", sql.Int, i + 1)
-          .input("Latitude", sql.Float, lat)
-          .input("Longitude", sql.Float, lon)
-          .query(`
+            // حفظ النقاط في RoutePoints
+            for (let i = 0; i < bestRouteCoords.length; i++) {
+                const [lon, lat] = bestRouteCoords[i];
+                await new sql.Request()
+                    .input("RouteID", sql.Int, routeID)
+                    .input("SequenceNo", sql.Int, i + 1)
+                    .input("Latitude", sql.Float, lat)
+                    .input("Longitude", sql.Float, lon)
+                    .query(`
             INSERT INTO RoutePoints (RouteID, SequenceNo, Latitude, Longitude)
             VALUES (@RouteID, @SequenceNo, @Latitude, @Longitude)
           `);
-      }
+            }
 
-      processedRoutes.push({
-        reportId: report.ReportID,
-        routeId: routeID,
-        unit: bestUnit.UnitName,
-        distanceKm: (bestDistance / 1000).toFixed(2),
-        durationMin: (bestDuration / 60).toFixed(2),
-      });
+            processedRoutes.push({
+                reportId: report.ReportID,
+                routeId: routeID,
+                unit: bestUnit.UnitName,
+                distanceKm: (bestDistance / 1000).toFixed(2),
+                durationMin: (bestDuration / 60).toFixed(2),
+            });
 
-      console.log(`م حفظ مسار لبلاغ ${report.ReportID} (${bestUnit.UnitName})`);
-    }
+            console.log(`م حفظ مسار لبلاغ ${report.ReportID} (${bestUnit.UnitName})`);
+        }
 
-    if (processedRoutes.length === 0) {
-      console.log("لم يتم توليد أي مسارات جديدة");
-      return;
-    }
+        if (processedRoutes.length === 0) {
+            console.log("لم يتم توليد أي مسارات جديدة");
+            return;
+        }
 
-    console.log("تم إنشاء المسارات التالية:");
-    processedRoutes.forEach((route) => {
-      console.log(`
+        console.log("تم إنشاء المسارات التالية:");
+        processedRoutes.forEach((route) => {
+            console.log(`
         بلاغ ${route.reportId} → وحدة ${route.unit} | ${route.distanceKm} كم | ${route.durationMin} دقيقة
       `);
-    });
-  } catch (err) {
-    console.error("خطأ أثناء التنفيذ:", err);
-  } finally {
-    sql.close();
-  }
+        });
+    } catch (err) {
+        console.error("خطأ أثناء التنفيذ:", err);
+    } finally {
+        sql.close();
+    }
 }
 
 // استدعاء الدالة كل 5 ثواني
