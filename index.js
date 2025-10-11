@@ -144,13 +144,13 @@ app.post('/report', authenticateToken, async (req, res) => {
         request.input('UserID', sql.Int, userId);
         request.input('UnitID', sql.Int, unitId);
         request.input('Report_StatusID', sql.Int, 1);
-        request.input('LocationWKT', sql.NVarChar(100), locationWKT);
+        request.input('LocationWKT', sql.NVarChar(200), locationWKT);
 
-        // إنشاء البلاغ واسترجاع ReportID بعد الإدخال
+        // حفظ الموقع في العمود LocationWKT مباشرة
         const result = await request.query(`
-      INSERT INTO Reports (UserID, UnitID, Report_StatusID, Location)
+      INSERT INTO Reports (UserID, UnitID, Report_StatusID, LocationWKT)
       OUTPUT INSERTED.ReportID
-      VALUES (@UserID, @UnitID, @Report_StatusID, geometry::STGeomFromText(@LocationWKT, 4326))
+      VALUES (@UserID, @UnitID, @Report_StatusID, @LocationWKT)
     `);
 
         const reportId = result.recordset[0].ReportID;
@@ -161,12 +161,12 @@ app.post('/report', authenticateToken, async (req, res) => {
             reportId: reportId
         });
     } catch (err) {
+        console.error("Report Error:", err.message);
         res.status(500).json({ error: err.message });
     } finally {
         sql.close();
     }
 });
-
 // جلب كل البلاغات
 app.get('/reports', async (req, res) => {
     try {
@@ -271,11 +271,11 @@ async function calculateRoutes() {
         await sql.connect(dbConfig);
 
         const reportsResult = await new sql.Request().query(`
-      SELECT r.ReportID, r.Location.STAsText() AS ReportLocation
-      FROM Reports r
-      WHERE r.Report_StatusID = 1
-      ORDER BY r.ReportID DESC
-    `);
+  SELECT r.ReportID, r.LocationWKT AS ReportLocation
+  FROM Reports r
+  WHERE r.Report_StatusID = 1
+  ORDER BY r.ReportID DESC
+`);
 
         if (reportsResult.recordset.length === 0) {
             console.log("لا توجد بلاغات جديدة");
@@ -301,8 +301,8 @@ async function calculateRoutes() {
 
             // كل الوحدات
             const unitsResult = await new sql.Request().query(`
-        SELECT UnitID, UnitName, Location.STAsText() AS LocationWKT 
-        FROM Units
+        SELECT UnitID, UnitName, LocationWKT 
+FROM Units
       `);
 
             const units = unitsResult.recordset;
