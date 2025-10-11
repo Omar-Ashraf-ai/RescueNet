@@ -361,74 +361,76 @@ async function calculateRoutes() {
     } finally {
         sql.close();
     }
-    // جلب نقاط المسار بناءً على المستخدم
-    app.get("/api/route-points/user/:userId", async (req, res) => {
-        const { userId } = req.params;
+}
+// نقطة نهاية لجلب نقاط المسار بناءً على RouteID
+// ✅ نقطة نهاية لجلب RouteID بناءً على ReportID
+app.get("/routes/by-report/:reportId", async (req, res) => {
+    const { reportId } = req.params;
 
-        if (!userId) return res.status(400).json({ error: "userId required" });
+    try {
+        await sql.connect(dbConfig);
 
-        try {
-            await sql.connect(dbConfig);
-
-            // 1. نجيب آخر ReportID خاص بالمستخدم
-            const reportResult = await new sql.Request()
-                .input("userId", sql.Int, userId)
-                .query(`
-        SELECT TOP 1 ReportID 
-        FROM Reports
-        WHERE UserID = @userId
-        ORDER BY DateCreated DESC
-      `);
-
-            if (reportResult.recordset.length === 0)
-                return res.status(404).json({ error: "No reports found for this user" });
-
-            const reportId = reportResult.recordset[0].ReportID;
-
-            // 2. نجيب RouteID المرتبط بالبلاغ
-            const routeResult = await new sql.Request()
-                .input("reportId", sql.Int, reportId)
-                .query(`
+        const routeResult = await new sql.Request()
+            .input("ReportID", sql.Int, reportId)
+            .query(`
         SELECT TOP 1 RouteID 
-        FROM Routes
-        WHERE ReportID = @reportId
-        ORDER BY CreatedAt DESC
+        FROM Routes 
+        WHERE ReportID = @ReportID
       `);
 
-            if (routeResult.recordset.length === 0)
-                return res.status(404).json({ error: "No route found for this report" });
+        if (routeResult.recordset.length === 0) {
+            return res.status(404).json({
+                ok: false,
+                message: "لم يتم العثور على مسار مرتبط بهذا البلاغ",
+            });
+        }
 
-            const routeId = routeResult.recordset[0].RouteID;
+        const routeId = routeResult.recordset[0].RouteID;
+        res.json({ ok: true, routeId });
+    } catch (err) {
+        console.error("Database error:", err);
+        res.status(500).json({ ok: false, error: err.message });
+    } finally {
+        sql.close();
+    }
+});
 
-            // 3. نجيب نقاط المسار الخاصة بالـ RouteID
-            const pointsResult = await new sql.Request()
-                .input("routeId", sql.Int, routeId)
-                .query(`
-        SELECT SequenceNo, Latitude, Longitude
+
+// ✅ نقطة نهاية لجلب نقاط المسار بناءً على RouteID
+app.get("/route-points/:routeId", async (req, res) => {
+    const { routeId } = req.params;
+
+    try {
+        await sql.connect(dbConfig);
+
+        const pointsResult = await new sql.Request()
+            .input("RouteID", sql.Int, routeId)
+            .query(`
+        SELECT Latitude AS lat, Longitude AS lng, SequenceNo
         FROM RoutePoints
-        WHERE RouteID = @routeId
+        WHERE RouteID = @RouteID
         ORDER BY SequenceNo ASC
       `);
 
-            if (pointsResult.recordset.length === 0)
-                return res.status(404).json({ error: "No route points found" });
-
-            // 4. نرجع البيانات كاملة
-            res.json({
-                userId,
-                reportId,
-                routeId,
-                points: pointsResult.recordset,
+        if (pointsResult.recordset.length === 0) {
+            return res.status(404).json({
+                ok: false,
+                message: "لم يتم العثور على نقاط المسار",
             });
-        } catch (err) {
-            console.error("Error fetching route points:", err);
-            res.status(500).json({ error: err.message });
-        } finally {
-            sql.close();
         }
-    });
-}
 
+        res.json({
+            ok: true,
+            routeId,
+            points: pointsResult.recordset,
+        });
+    } catch (err) {
+        console.error("Database error:", err);
+        res.status(500).json({ ok: false, error: err.message });
+    } finally {
+        sql.close();
+    }
+});
 // استدعاء الدالة كل 5 ثواني
 setInterval(calculateRoutes, 5000);
 // تشغيل السيرفر
