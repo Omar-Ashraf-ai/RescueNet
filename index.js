@@ -431,8 +431,18 @@ app.get("/route-points/:routeId", async (req, res) => {
         sql.close();
     }
 });
+// ✅ نقطة نهاية لتحديث المسارات يدويًا بعد البلاغ
+app.post("/run-calculate-routes", async (req, res) => {
+    try {
+        await calculateRoutes();
+        res.json({ ok: true, message: "Routes recalculated successfully" });
+    } catch (err) {
+        console.error("Error recalculating routes:", err);
+        res.status(500).json({ ok: false, error: err.message });
+    }
+});
 // استدعاء الدالة كل 5 ثواني
-setInterval(calculateRoutes, 5000);
+// setInterval(calculateRoutes, 5000);
 // تشغيل السيرفر
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`
