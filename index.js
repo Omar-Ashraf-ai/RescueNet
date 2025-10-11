@@ -133,24 +133,33 @@ app.post('/report', authenticateToken, async (req, res) => {
     const { unitId, locationWKT } = req.body;
     const userId = req.user.userId;
 
-    if (!locationWKT) return res.status(400).json({ error: 'location required' });
+    if (!unitId || !locationWKT) {
+        return res.status(400).json({ error: 'missing fields' });
+    }
 
     try {
         await sql.connect(dbConfig);
-        const request = new sql.Request();
 
+        const request = new sql.Request();
         request.input('UserID', sql.Int, userId);
-        // نخلي UnitID ممكن يكون Null في البداية
-        if (unitId) {
-            request.input('UnitID', sql.Int, unitId);
-        } else {
-            request.input('UnitID', sql.Int, null);
-        }
+        request.input('UnitID', sql.Int, unitId);
         request.input('Report_StatusID', sql.Int, 1);
         request.input('LocationWKT', sql.NVarChar(100), locationWKT);
 
-        await request.execute('AddReport');
-        res.status(201).json({ ok: true, message: 'report created successfully' });
+        // إنشاء البلاغ واسترجاع ReportID بعد الإدخال
+        const result = await request.query(`
+      INSERT INTO Reports (UserID, UnitID, Report_StatusID, Location)
+      OUTPUT INSERTED.ReportID
+      VALUES (@UserID, @UnitID, @Report_StatusID, geometry::STGeomFromText(@LocationWKT, 4326))
+    `);
+
+        const reportId = result.recordset[0].ReportID;
+
+        res.status(201).json({
+            ok: true,
+            message: "report created successfully",
+            reportId: reportId
+        });
     } catch (err) {
         res.status(500).json({ error: err.message });
     } finally {
