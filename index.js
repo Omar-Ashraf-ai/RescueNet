@@ -445,50 +445,37 @@ app.get("/routes/by-report/:reportId", async (req, res) => {
 
 
 // ✅ جلب نقاط المسار بناءً على RouteID
-app.get("/route-points/:routeId", async (req, res) => {
-    const { routeId } = req.params;
+app.get("/routes/by-report/:reportId", async (req, res) => {
+    const { reportId } = req.params;
 
     try {
         await sql.connect(dbConfig);
 
-        const result = await new sql.Request()
-            .input("RouteID", sql.Int, routeId)
+        const routeResult = await new sql.Request()
+            .input("ReportID", sql.Int, reportId)
             .query(`
-                SELECT 
-                    SequenceNo,
-                    Latitude AS lat,
-                    Longitude AS lng
-                FROM RoutePoints
-                WHERE RouteID = @RouteID
-                ORDER BY SequenceNo ASC
-            `);
+        SELECT TOP 1 RouteID 
+        FROM Routes 
+        WHERE ReportID = @ReportID
+        ORDER BY RouteID DESC
+      `);
 
-        const points = result.recordset;
-
-        if (!points || points.length === 0) {
+        if (routeResult.recordset.length === 0) {
             return res.status(404).json({
                 ok: false,
-                message: "لم يتم العثور على نقاط المسار",
+                message: "لم يتم العثور على مسار مرتبط بهذا البلاغ",
             });
         }
 
-        res.json({
-            ok: true,
-            routeId: parseInt(routeId),
-            count: points.length,
-            points,
-        });
+        const routeId = routeResult.recordset[0].RouteID;
+        res.json({ ok: true, routeId });
     } catch (err) {
         console.error("Database error:", err);
-        res.status(500).json({
-            ok: false,
-            error: err.message,
-        });
+        res.status(500).json({ ok: false, error: err.message });
     } finally {
         sql.close();
     }
 });
-
 // تشغيل السيرفر
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`
