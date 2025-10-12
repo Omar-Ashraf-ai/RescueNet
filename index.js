@@ -157,9 +157,12 @@ app.post('/report', authenticateToken, async (req, res) => {
         const reportIdQuery = await new sql.Request().query('SELECT TOP 1 ReportID FROM Reports ORDER BY ReportID DESC');
         const reportId = reportIdQuery.recordset[0].ReportID;
 
+        // احسب المسار فورًا
+        await calculateRoutes();
+
         res.status(201).json({
             ok: true,
-            message: "report created successfully",
+            message: "report created and route calculated successfully",
             reportId
         });
     } catch (err) {
@@ -376,9 +379,9 @@ async function calculateRoutes() {
 }
 
 // تشغيل الدالة تلقائيًا كل ثانية
-setInterval(() => {
-    calculateRoutes();
-}, 1000);
+// setInterval(() => {
+//     calculateRoutes();
+// }, 1000);
 // نقطة نهاية لجلب نقاط المسار بناءً على RouteID
 // ✅ نقطة نهاية لجلب RouteID بناءً على ReportID
 app.get("/routes/by-report/:reportId", async (req, res) => {
@@ -445,37 +448,50 @@ app.get("/routes/by-report/:reportId", async (req, res) => {
 
 
 // ✅ جلب نقاط المسار بناءً على RouteID
-app.get("/routes/by-report/:reportId", async (req, res) => {
-    const { reportId } = req.params;
+app.get("/route-points/:routeId", async (req, res) => {
+    const { routeId } = req.params;
 
     try {
         await sql.connect(dbConfig);
 
-        const routeResult = await new sql.Request()
-            .input("ReportID", sql.Int, reportId)
+        const result = await new sql.Request()
+            .input("RouteID", sql.Int, routeId)
             .query(`
-        SELECT TOP 1 RouteID 
-        FROM Routes 
-        WHERE ReportID = @ReportID
-        ORDER BY RouteID DESC
-      `);
+                SELECT 
+                    SequenceNo,
+                    Latitude AS lat,
+                    Longitude AS lng
+                FROM RoutePoints
+                WHERE RouteID = @RouteID
+                ORDER BY SequenceNo ASC
+            `);
 
-        if (routeResult.recordset.length === 0) {
+        const points = result.recordset;
+
+        if (!points || points.length === 0) {
             return res.status(404).json({
                 ok: false,
-                message: "لم يتم العثور على مسار مرتبط بهذا البلاغ",
+                message: "لم يتم العثور على نقاط المسار",
             });
         }
 
-        const routeId = routeResult.recordset[0].RouteID;
-        res.json({ ok: true, routeId });
+        res.json({
+            ok: true,
+            routeId: parseInt(routeId),
+            count: points.length,
+            points,
+        });
     } catch (err) {
         console.error("Database error:", err);
-        res.status(500).json({ ok: false, error: err.message });
+        res.status(500).json({
+            ok: false,
+            error: err.message,
+        });
     } finally {
         sql.close();
     }
 });
+
 // تشغيل السيرفر
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`
