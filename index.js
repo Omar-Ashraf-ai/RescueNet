@@ -246,20 +246,23 @@ function extractCoords(wkt) {
 }
 
 // دالة حساب المسارات
+// دالة حساب المسارات المعدلة بمنطق صحيح
 async function calculateRoutes() {
     try {
         await sql.connect(dbConfig);
 
+        // جلب البلاغات الجديدة مع نوع الوحدة المطلوب
         const reportsResult = await new sql.Request().query(`
-            SELECT r.ReportID, r.Location.STAsText() AS ReportLocation
-            FROM Reports r
-            WHERE r.Report_StatusID = 1
-            ORDER BY r.ReportID DESC
-        `);
+      SELECT 
+          r.ReportID, 
+          r.Location.STAsText() AS ReportLocation,
+          r.UnitID AS UnitTypeID
+      FROM Reports r
+      WHERE r.Report_StatusID = 1
+      ORDER BY r.ReportID DESC
+    `);
 
-        if (reportsResult.recordset.length === 0) {
-            return;
-        }
+        if (reportsResult.recordset.length === 0) return;
 
         const reports = reportsResult.recordset;
         const processedRoutes = [];
@@ -268,23 +271,35 @@ async function calculateRoutes() {
             const reportCoords = extractCoords(report.ReportLocation);
             if (!reportCoords) continue;
 
+            // التأكد أنه لم يتم إنشاء مسار سابق لهذا البلاغ
             const routeCheck = await new sql.Request()
                 .input("ReportID", sql.Int, report.ReportID)
                 .query("SELECT RouteID FROM Routes WHERE ReportID = @ReportID");
 
             if (routeCheck.recordset.length > 0) continue;
 
-            const unitsResult = await new sql.Request().query(`
-                SELECT UnitID, UnitName, Location.STAsText() AS LocationWKT 
-                FROM Units
-            `);
+            // جلب جميع الوحدات التي نوعها مطابق لنوع البلاغ
+            const unitsResult = await new sql.Request()
+                .input("UnitTypeID", sql.Int, report.UnitTypeID)
+                .query(`
+          SELECT 
+              UnitID, 
+              UnitName, 
+              UnitTypeID,
+              Location.STAsText() AS LocationWKT
+          FROM Units
+          WHERE UnitTypeID = @UnitTypeID
+        `);
 
             const units = unitsResult.recordset;
+            if (units.length === 0) continue;
+
             let bestUnit = null;
             let bestDuration = Infinity;
             let bestDistance = Infinity;
             let bestRouteCoords = [];
 
+            // حساب المسار بين موقع البلاغ وكل وحدة مناسبة
             for (const unit of units) {
                 const unitCoords = extractCoords(unit.LocationWKT);
                 if (!unitCoords) continue;
@@ -292,7 +307,7 @@ async function calculateRoutes() {
                 try {
                     const orsResponse = await axios.post(
                         "https://api.openrouteservice.org/v2/directions/driving-car/geojson",
-                        { coordinates: [unitCoords, reportCoords] },
+                        { coordinates: [reportCoords, unitCoords] }, // البداية البلاغ - النهاية الوحدة
                         {
                             headers: {
                                 Authorization: process.env.ORS_API_KEY,
@@ -306,7 +321,6 @@ async function calculateRoutes() {
 
                     const summary = data.features[0].properties.summary;
                     const geometry = data.features[0].geometry;
-
                     const duration = summary.duration;
                     const distance = summary.distance;
 
@@ -323,19 +337,21 @@ async function calculateRoutes() {
 
             if (!bestUnit) continue;
 
+            // إدخال المسار الأفضل في قاعدة البيانات
             const routeInsert = await new sql.Request()
                 .input("ReportID", sql.Int, report.ReportID)
                 .input("UnitID", sql.Int, bestUnit.UnitID)
                 .input("Distance", sql.Float, bestDistance)
                 .input("Duration", sql.Float, bestDuration)
                 .query(`
-                    INSERT INTO Routes (ReportID, UnitID, Distance, Duration, CreatedAt)
-                    OUTPUT INSERTED.RouteID
-                    VALUES (@ReportID, @UnitID, @Distance, @Duration, GETDATE())
-                `);
+          INSERT INTO Routes (ReportID, UnitID, Distance, Duration, CreatedAt)
+          OUTPUT INSERTED.RouteID
+          VALUES (@ReportID, @UnitID, @Distance, @Duration, GETDATE())
+        `);
 
             const routeID = routeInsert.recordset[0].RouteID;
 
+            // تخزين نقاط المسار بالتسلسل
             for (let i = 0; i < bestRouteCoords.length; i++) {
                 const [lon, lat] = bestRouteCoords[i];
                 await new sql.Request()
@@ -344,25 +360,26 @@ async function calculateRoutes() {
                     .input("Latitude", sql.Float, lat)
                     .input("Longitude", sql.Float, lon)
                     .query(`
-                        INSERT INTO RoutePoints (RouteID, SequenceNo, Latitude, Longitude)
-                        VALUES (@RouteID, @SequenceNo, @Latitude, @Longitude)
-                    `);
+            INSERT INTO RoutePoints (RouteID, SequenceNo, Latitude, Longitude)
+            VALUES (@RouteID, @SequenceNo, @Latitude, @Longitude)
+          `);
             }
 
+            // تحديث حالة البلاغ بعد حساب المسار
             await new sql.Request()
                 .input("ReportID", sql.Int, report.ReportID)
                 .query(`
-                    UPDATE Reports 
-                    SET Report_StatusID = 2 
-                    WHERE ReportID = @ReportID
-                `);
+          UPDATE Reports 
+          SET Report_StatusID = 2 
+          WHERE ReportID = @ReportID
+        `);
 
             processedRoutes.push({
                 reportId: report.ReportID,
                 routeId: routeID,
                 unit: bestUnit.UnitName,
                 distance: bestDistance,
-                duration: bestDuration
+                duration: bestDuration,
             });
         }
 
@@ -370,7 +387,6 @@ async function calculateRoutes() {
             console.log("تم إنشاء مسارات جديدة:");
             console.table(processedRoutes);
         }
-
     } catch (err) {
         console.error("خطأ أثناء تنفيذ الدالة:", err);
     } finally {
