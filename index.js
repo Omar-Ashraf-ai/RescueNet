@@ -236,15 +236,15 @@ app.put('/report/:id/status', async (req, res) => {
     }
 });
 
-// دالة تحليل WKT
 function extractCoords(wkt) {
     if (!wkt) return null;
-    wkt = wkt.replace(/POINT|\(|\)/gi, "").trim();
-    const parts = wkt.split(" ");
-    if (parts.length < 2) return null;
-    return [parseFloat(parts[0]), parseFloat(parts[1])];
-}
+    const match = wkt.match(/POINT\s*\(([-\d\.]+)\s+([-\d\.]+)\)/);
+    if (!match) return null;
 
+    const lat = parseFloat(match[1]);
+    const lon = parseFloat(match[2]);
+    return [lon, lat]; // مهم جداً — ترتيب ORS
+}
 // دالة حساب المسارات
 async function calculateRoutes() {
     try {
